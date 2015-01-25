@@ -1,0 +1,229 @@
+---
+title: "Practical Machine Learning - Project Report"
+date: "January 22, 2015"
+output: html_document
+---
+
+# Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, I have used data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. These participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The goal of this project is to use the readings from the accelerometers to predict the manner in which they did the exercise i.e. was it Correct or Incorrect. 
+
+This project report covers following:
+
+- how the model was built   
+- Cross validation   
+- Expected out of sample error  
+- Rationale for the choices made   
+- Prediction for 20 different test cases
+
+# Source of data
+
+The original source of the data is following:
+
+http://groupware.les.inf.puc-rio.br/har  (see the section on the Weight Lifting Exercise Dataset)
+
+I have used data provided at following locations provided as part of the assignment:
+
+###### Training data: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+###### Test data: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+# How the model was built
+
+I have used following stages for building the components of the Predictors:
+
+Question -> Input Data -> Features -> Algorithm -> Parameters -> Evaluation
+
+## QUESTION  
+
+Six participants participated in a dumbell lifting exercise in five different fashions (captured in Classe column). 
+
+- Class A - Exactly according to the specification  
+- Class B - Throwing the elbows to the front  
+- Class C - Lifting the dumbbell only halfway  
+- Class D - Lowering the dumbbell only halfway  
+- Class E - Throwing the hips to the front  
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.  
+
+The question that this project reports tries to answers is:  
+
+"Can the appropriate activity quality (class A-E) be predicted based on the data gathered from accelerometers on the belt, forearm, arm, and dumbell of the participants?"
+
+## INPUT DATA
+
+#### Read the data
+```{r}
+# Download data
+trainURL<- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+file_training <- "data/pml-training.csv"
+download.file(url=trainURL, destfile=file_training, method="curl")
+
+testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+file_testing <- "data/pml-testing.csv"
+download.file(testURL,destfile=file_testing, method="curl")
+
+# Read the data. Replace empty values with NA.
+training <- read.csv(file_training, header=TRUE, na.strings=c("NA",""))
+testing <- read.csv(file_testing, header=TRUE, na.strings=c("NA",""))
+
+```
+
+#### Partition training data into two sets - myTraining and myTesting
+```{r warning=FALSE, message=FALSE, results='hide',comment=FALSE}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+```
+```{r}
+set.seed(2345)
+inTrain <- createDataPartition(y=training$classe, p=0.6, list=FALSE)
+myTraining <- training[inTrain, ]
+myTesting <- training[-inTrain, ]
+
+colnames_train <- colnames(myTraining) #Capturing the column names
+```
+
+## FEATURES
+
+##### Step 1: Remove NA columns
+```{r}
+# Count the number of non-NAs in each col.
+nonNAs <- function(x) {
+    as.vector(apply(x, 2, function(x) length(which(!is.na(x)))))
+}
+
+# Build vector of missing data or NA columns to drop.
+colcnts <- nonNAs(myTraining)
+drops <- c()
+for (cnt in 1:length(colcnts)) {
+    if (colcnts[cnt] < nrow(myTraining)) {
+        drops <- c(drops, colnames_train[cnt])
+    }
+}
+
+# Drop NA data 
+myTraining <- myTraining[,!(names(myTraining) %in% drops)]
+```
+##### Step 2: Remove first 7 columns as they're unnecessary for predicting.
+```{r}
+myTraining <- myTraining[,8:length(colnames(myTraining))]
+```
+##### Step 3: Remove Zero covariates
+```{r}
+nzvcheck <- nearZeroVar(myTraining, saveMetrics=TRUE)
+#Check the number of rows where nzv=TRUE
+nrow(subset(nzvcheck,nzv==TRUE))
+```
+Given that all of the near zero variance variables (nsv) are FALSE for all rows, none of the covariates need to be removed.
+
+##### Repeat the above steps for myTesting data too.
+```{r}
+myTesting <- myTesting[colnames(myTraining)]
+```
+
+## ALGORITHM
+
+Lets start by using Classification Tree due to following reasons:
+
+- Performs well with large datasets. Large amounts of data can be analysed using standard computing resources in reasonable time.
+- Able to handle both numerical and categorical data. Other techniques are usually specialised in analysing datasets that have only one type of variable.
+- Possible to validate a model using statistical tests. That makes it possible to account for the reliability of the model.
+
+Source: Wikipedia
+
+#### Start with out-of-the-box Classification Tree algorithm  
+```{r}
+set.seed(2345)
+modFitD1 <- train(myTraining$classe ~ ., data = myTraining, method="rpart")
+print(modFitD1, digits=3)
+fancyRpartPlot(modFitD1$finalModel, sub="")
+```
+
+Let's evaluate the model using cross-validation with myTesting data. We will use myTesting data to estimate the out of sample error rate. myTesting data should provide an unbiased estimate of prediction accuracy.
+
+```{r}
+predictionD1 <- predict(modFitD1, newdata=myTesting)
+print(confusionMatrix(predictionD1, myTesting$classe), digits=4)
+```
+Out of Sample error rate is: 1-Accuracy = 0.5071
+
+#### Try Classification Tree algorithm with both preprocessing and cross validation.
+```{r}
+set.seed(2345)
+modFitD2 <- train(myTraining$classe ~ .,  preProcess=c("center", "scale"), 
+            trControl=trainControl(method = "cv", number = 4), 
+            data = myTraining, method="rpart")
+print(modFitD2, digits=3)
+
+```
+Let's evaluate the model using cross-validation with myTesting data. We will use myTesting data to estimate the out of sample error rate. myTesting data should provide an unbiased estimate of prediction accuracy.
+
+```{r}
+
+predictionD2 <- predict(modFitD2, newdata=myTesting)
+print(confusionMatrix(predictionD2, myTesting$classe), digits=4)
+```
+Out of Sample error rate is: 1-Accuracy = 0.5071
+
+The impact of incorporating both preprocessing and cross validation appeared to show some minimal improvement (accuracy rate rose from 0.503 to 0.518 against training sets). However, when run against the corresponding testing set, the accuracy rate was identical (0.4929) for both the “out of the box” and "with preprocessing & cross validation" methods.  
+
+
+
+Lets now try Random Forest algorithm which uses a number of decision trees, in order to improve the classification rate.  
+
+
+#### Try Random Forest algorithm for prediction with only cross validation
+```{r}
+modFitR1 <- train(classe ~ ., data = myTraining, method = "rf", 
+                 trControl=trainControl(method = "cv", number = 4))
+print(modFitR1, digits=3)
+```
+Let's evaluate the model using cross-validation with myTesting data. We will use myTesting data to estimate the out of sample error rate. myTesting data should provide an unbiased estimate of prediction accuracy.
+
+```{r}
+predictionR1 <- predict(modFitR1, newdata=myTesting) 
+print(confusionMatrix(predictionR1, myTesting$classe), digits=4)
+```
+Out of Sample error rate is: 1-Accuracy = 0.0103
+
+#### Try Random Forest algorithm for prediction with both cross validation and preprocessing
+```{r}
+set.seed(2345)
+modFitR2 <- train(myTraining$classe ~ ., method="rf", preProcess=c("center", "scale"), 
+                  trControl=trainControl(method = "cv", number = 4), data=myTraining)
+print(modFitR2, digits=3)
+```
+Let's evaluate the model using cross-validation with myTesting data. We will use myTesting data to estimate the out of sample error rate. myTesting data should provide an unbiased estimate of prediction accuracy.
+
+```{r}
+predictionR2 <- predict(modFitR2, newdata=myTesting)
+print(confusionMatrix(predictionR2, myTesting$classe), digits=4)
+```
+Out of Sample error rate is: 1-Accuracy = 0.0108
+
+The best Out of Sample error rate is achieved with Random Forest algorithm with only cross validation. Hence I will use this algorithm to predict for the 20 items in the training data.
+
+
+# Generating Files to submit as answers for the Assignment:
+```{r}
+predictionT <- predict(modFitR1, newdata=testing)
+```
+Function to generate files with predictions to submit for assignment
+```{r}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(predictionT)
+```
